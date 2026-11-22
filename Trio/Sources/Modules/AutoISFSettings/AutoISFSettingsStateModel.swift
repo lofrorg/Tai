@@ -6,6 +6,21 @@ extension AutoISFSettings {
     final class StateModel: BaseStateModel<Provider> {
         @Injected() var settings: SettingsManager!
 
+        @Injected() var broadcaster: Broadcaster!
+        @Injected() var glucoseStorage: GlucoseStorage!
+        @Published var autoISFParabolaSmoothed = false
+        @Published var autoISFParabolaMinMinutes: Decimal?
+
+        var isSuitableSource: Bool {
+            guard let settings = settingsManager?.settings else { return false }
+            return settings.cgm == .plugin &&
+                CGMCatalogEntry.supportsRawGlucoseObservations(identifier: settings.cgmPluginIdentifier)
+        }
+
+        var automaticParabolaMinimum: Decimal {
+            (glucoseStorage.observationContext?.cadence ?? .legacy).parabolaMinimum(override: nil)
+        }
+
         var units: GlucoseUnits = .mgdL
 
         // Published properties for state binding
@@ -49,7 +64,11 @@ extension AutoISFSettings {
         }
 
         override func subscribe() {
+            broadcaster.register(SettingsObserver.self, observer: self)
             units = settingsManager.settings.units
+            subscribePreferencesSetting(\.autoISFParabolaSmoothed, on: $autoISFParabolaSmoothed) { autoISFParabolaSmoothed = $0 }
+            subscribePreferencesSetting(\.autoISFParabolaMinMinutes, on: $autoISFParabolaMinMinutes) {
+                autoISFParabolaMinMinutes = $0 }
             // Ensure all preferences map to state properties correctly
             subscribePreferencesSetting(\.autoisf, on: $autoisf) { autoisf = $0 }
             subscribePreferencesSetting(\.enableAutosens, on: $enableAutosens) { enableAutosens = $0 }
@@ -64,6 +83,14 @@ extension AutoISFSettings {
             subscribePreferencesSetting(\.smbDeliveryRatioMin, on: $smbDeliveryRatioMin) { smbDeliveryRatioMin = $0 }
             subscribePreferencesSetting(\.smbDeliveryRatioMax, on: $smbDeliveryRatioMax) { smbDeliveryRatioMax = $0 }
             subscribePreferencesSetting(\.smbDeliveryRatioBGrange, on: $smbDeliveryRatioBGrange) { smbDeliveryRatioBGrange = $0 }
+            // Changing a delivery ratio after a cadence change is the review the Home notice asks for.
+            Publishers.Merge3(
+                $smbDeliveryRatio.removeDuplicates().dropFirst(),
+                $smbDeliveryRatioMin.removeDuplicates().dropFirst(),
+                $smbDeliveryRatioMax.removeDuplicates().dropFirst()
+            )
+            .sink { _ in SmbRatioReviewNotice.shared.clear() }
+            .store(in: &lifetime)
             subscribePreferencesSetting(\.smbMaxRangeExtension, on: $smbMaxRangeExtension) { smbMaxRangeExtension = $0 }
             subscribePreferencesSetting(\.enableBGacceleration, on: $enableBGAcceleration) { enableBGAcceleration = $0 }
             subscribePreferencesSetting(\.autoISFhourlyChange, on: $autoISFhourlyChange) { autoISFhourlyChange = $0 }
@@ -78,6 +105,7 @@ extension AutoISFSettings {
 
 extension AutoISFSettings.StateModel: SettingsObserver {
     func settingsDidChange(_: TrioSettings) {
+        objectWillChange.send()
         units = settingsManager.settings.units
     }
 }

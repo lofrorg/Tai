@@ -1,2 +1,3 @@
 based on Trio dev 1.0.2.79
+1min Loops test
 new profile schedule scheme for menstruation cycle
